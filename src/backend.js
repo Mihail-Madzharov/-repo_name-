@@ -15,40 +15,56 @@ let firebaseAdminInitialized = false;
 let db = null;
 
 try {
-  let serviceAccount;
-  let initSource;
-
-  // Try JSON environment variable first
-  if (firebaseServiceAccountJson) {
-    console.log("Attempting to parse FIREBASE_SERVICE_ACCOUNT_JSON...");
-    try {
-      serviceAccount = JSON.parse(firebaseServiceAccountJson);
-      initSource = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable";
-      console.log(`✅ Successfully parsed Firebase credentials from env var`);
-    } catch (parseError) {
-      console.error("❌ Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", parseError.message);
-      throw new Error(`Invalid JSON in FIREBASE_SERVICE_ACCOUNT_JSON: ${parseError.message}`);
-    }
+  // Check if already initialized
+  if (admin.apps.length > 0) {
+    console.log("Firebase Admin already initialized, skipping init...");
+    firebaseAdminInitialized = true;
+    db = getFirestore();
   } else {
-    console.log(`Attempting to read credentials from file: ${firebaseServiceAccountPath}`);
-    serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, "utf8"));
-    initSource = `file path: ${firebaseServiceAccountPath}`;
-    console.log(`✅ Successfully read Firebase credentials from file`);
-  }
+    let serviceAccount;
+    let initSource;
 
-  console.log("Initializing Firebase Admin with credentials...");
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    projectId: firebaseProjectId,
-  });
-  firebaseAdminInitialized = true;
-  db = getFirestore();
-  console.log(`✅ Firebase Admin initialized using ${initSource}`);
+    console.log("FIREBASE_SERVICE_ACCOUNT_JSON env var set?", !!firebaseServiceAccountJson);
+
+    // Try JSON environment variable first
+    if (firebaseServiceAccountJson) {
+      console.log("Attempting to parse FIREBASE_SERVICE_ACCOUNT_JSON...");
+      try {
+        serviceAccount = JSON.parse(firebaseServiceAccountJson);
+        initSource = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable";
+        console.log(`✅ Successfully parsed Firebase credentials from env var`);
+        console.log(`  Project ID in credentials: ${serviceAccount.project_id}`);
+      } catch (parseError) {
+        console.error("❌ Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", parseError.message);
+        throw new Error(`Invalid JSON in FIREBASE_SERVICE_ACCOUNT_JSON: ${parseError.message}`);
+      }
+    } else {
+      console.log(`Attempting to read credentials from file: ${firebaseServiceAccountPath}`);
+      serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, "utf8"));
+      initSource = `file path: ${firebaseServiceAccountPath}`;
+      console.log(`✅ Successfully read Firebase credentials from file`);
+      console.log(`  Project ID in credentials: ${serviceAccount.project_id}`);
+    }
+
+    console.log("Checking if admin.credential exists...");
+    if (!admin.credential) {
+      throw new Error("firebase-admin credential module not available. Check firebase-admin installation.");
+    }
+
+    console.log("Initializing Firebase Admin with credentials...");
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: firebaseProjectId,
+    });
+    firebaseAdminInitialized = true;
+    db = getFirestore();
+    console.log(`✅ Firebase Admin initialized using ${initSource}`);
+  }
 } catch (error) {
   console.error(
     `❌ Firebase Admin could not initialize from credentials: ${error.message}`
   );
-  console.error("Error details:", error);
+  console.error("Full error:", error);
   console.warn("⚠️  Firebase Admin will not be available. Credentials must be set.");
 }
 
