@@ -413,19 +413,96 @@ function normalizeJourney(aiResult) {
   };
 }
 
+function findFallbackNavigateUrl(stepIndex) {
+  if (!activeJourney?.steps?.length) return "";
+
+  for (let i = stepIndex; i < activeJourney.steps.length; i += 1) {
+    const candidate = activeJourney.steps[i]?.navigateUrl;
+    if (candidate) return candidate;
+  }
+
+  for (let i = stepIndex - 1; i >= 0; i -= 1) {
+    const candidate = activeJourney.steps[i]?.navigateUrl;
+    if (candidate) return candidate;
+  }
+
+  return "";
+}
+
+function normalizeNavigationUrl(rawUrl, baseUrl) {
+  let candidate = String(rawUrl || "").trim();
+  candidate = candidate.replace(/[),.;!?]+$/g, "");
+
+  if (candidate.startsWith("/") && baseUrl) {
+    candidate = new URL(candidate, baseUrl).href;
+  }
+
+  if (!/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  const parsed = new URL(candidate);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Unsupported redirect protocol: ${parsed.protocol}. Only http/https are allowed.`
+    );
+  }
+
+  return parsed.href;
+}
+
+async function navigateToJourneyUrl(rawUrl) {
+  if (!rawUrl) {
+    throw new Error("Missing redirect URL.");
+  }
+
+  // Try background navigation first.
+  try {
+    const navResponse = await chrome.runtime.sendMessage({
+      type: "NAVIGATE_TO_URL",
+      url: rawUrl,
+    });
+
+    if (navResponse?.ok) {
+      return navResponse.url || rawUrl;
+    }
+  } catch {
+    // Fall through to direct navigation fallback.
+  }
+
+  // Fallback: navigate directly from sidepanel using tabs API.
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    currentWindow: true,
+  });
+
+  const normalizedUrl = normalizeNavigationUrl(rawUrl, tab?.url || "");
+
+  if (tab?.id) {
+    try {
+      await chrome.tabs.update(tab.id, { url: normalizedUrl });
+      return normalizedUrl;
+    } catch {
+      // Try opening a new tab next.
+    }
+  }
+
+  await chrome.tabs.create({ url: normalizedUrl, active: true });
+  return normalizedUrl;
+}
+
 async function runJourneyStep(stepIndex) {
   if (!activeJourney) return;
   const step = activeJourney.steps[stepIndex];
   if (!step) return;
 
   if (step.navigateUrl) {
-    const navResponse = await chrome.runtime.sendMessage({
-      type: "NAVIGATE_TO_URL",
-      url: step.navigateUrl,
-    });
-
-    if (!navResponse?.ok) {
-      throw new Error(navResponse?.error || "Failed to navigate to required page.");
+    try {
+      await navigateToJourneyUrl(step.navigateUrl);
+    } catch (error) {
+      throw new Error(
+        `Failed to navigate to required page: ${error?.message || "unknown error"}`
+      );
     }
 
     await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -464,7 +541,7 @@ function renderActiveJourney() {
     <div class="journey-step">
       <div class="journey-step-title">${activeStepIndex + 1}. ${escapeHtml(step.title)}</div>
       <div class="journey-step-action">${escapeHtml(step.action)}</div>
-      ${step.navigateUrl ? `<div class="journey-step-target">Navigate to: <strong>${escapeHtml(step.navigateUrl)}</strong></div>` : ""}
+      ${step.navigateUrl ? `<div class="journey-step-target">Navigate to: <a href="${escapeHtml(step.navigateUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(step.navigateUrl)}</a></div>` : ""}
       ${step.targetText ? `<div class="journey-step-target">Target: <strong>${escapeHtml(step.targetText)}</strong></div>` : ""}
       ${step.reason ? `<div class="help-text">${escapeHtml(step.reason)}</div>` : ""}
       <div class="journey-step-buttons">
@@ -491,9 +568,14 @@ async function safeGuideStep(stepIndex) {
   try {
     await runJourneyStep(stepIndex);
   } catch (error) {
+    const fallbackUrl = findFallbackNavigateUrl(stepIndex);
     resultEl.insertAdjacentHTML(
       "afterbegin",
-      `<div class="status-message error" style="display:block; margin-bottom: 8px;">${escapeHtml(error.message || "Failed to guide this step.")}</div>`,
+      `<div class="status-message error" style="display:block; margin-bottom: 8px;">${escapeHtml(error.message || "Failed to guide this step.")}${
+        fallbackUrl
+          ? `<div style="margin-top:8px;"><a href="${escapeHtml(fallbackUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(fallbackUrl)}</a></div><div style="margin-top:8px;"><button id="journey-fallback-nav" class="btn-secondary" data-url="${escapeHtml(fallbackUrl)}">Open Suggested Page</button></div>`
+          : ""
+      }</div>`,
     );
   }
 }
@@ -529,21 +611,38 @@ resultEl.addEventListener("click", async (event) => {
     const step = activeJourney?.steps?.[activeStepIndex];
     if (!step?.navigateUrl) return;
 
-    const response = await chrome.runtime.sendMessage({
-      type: "NAVIGATE_TO_URL",
-      url: step.navigateUrl,
-    });
-
-    if (!response?.ok) {
+    try {
+      await navigateToJourneyUrl(step.navigateUrl);
+    } catch (error) {
       resultEl.insertAdjacentHTML(
         "afterbegin",
-        `<div class="status-message error" style="display:block; margin-bottom: 8px;">${escapeHtml(response?.error || "Failed to open required page.")}</div>`,
+        `<div class="status-message error" style="display:block; margin-bottom: 8px;">${escapeHtml(error?.message || "Failed to open required page.")}</div>`,
       );
+      return;
     }
     return;
   }
 
   if (target.id === "journey-highlight-only") {
+    await safeGuideStep(activeStepIndex);
+    return;
+  }
+
+  if (target.id === "journey-fallback-nav") {
+    const url = target.dataset.url;
+    if (!url) return;
+
+    try {
+      await navigateToJourneyUrl(url);
+    } catch (error) {
+      resultEl.insertAdjacentHTML(
+        "afterbegin",
+        `<div class="status-message error" style="display:block; margin-bottom: 8px;">${escapeHtml(error?.message || "Failed to open suggested page.")}</div>`,
+      );
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 1200));
     await safeGuideStep(activeStepIndex);
   }
 });

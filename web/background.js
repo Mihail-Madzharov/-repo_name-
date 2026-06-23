@@ -310,6 +310,54 @@ async function navigateActiveTab(url) {
     throw new Error("No active tab found.");
   }
 
-  await chrome.tabs.update(tab.id, { url });
-  return { ok: true, url };
+  const normalizedUrl = normalizeNavigationUrl(url, tab.url || "");
+  try {
+    await chrome.tabs.update(tab.id, { url: normalizedUrl });
+    return { ok: true, url: normalizedUrl, method: "update" };
+  } catch (updateError) {
+    try {
+      await chrome.tabs.create({ url: normalizedUrl, active: true });
+      return { ok: true, url: normalizedUrl, method: "create" };
+    } catch (createError) {
+      throw new Error(
+        `Navigation failed for ${normalizedUrl}. update error: ${updateError?.message || "unknown"}; create error: ${createError?.message || "unknown"}`
+      );
+    }
+  }
+}
+
+function normalizeNavigationUrl(rawUrl, baseUrl) {
+  let candidate = String(rawUrl).trim();
+
+  // Common LLM artifact: trailing punctuation at sentence boundaries.
+  candidate = candidate.replace(/[),.;!?]+$/g, "");
+
+  // Relative path support using current tab URL as base.
+  if (candidate.startsWith("/") && baseUrl) {
+    try {
+      candidate = new URL(candidate, baseUrl).href;
+    } catch {
+      throw new Error(`Invalid relative redirect URL: ${rawUrl}`);
+    }
+  }
+
+  // Accept host-only URLs like example.com/settings.
+  if (!/^[a-zA-Z][a-zA-Z\d+.-]*:\/\//.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error(`Invalid redirect URL: ${rawUrl}`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Unsupported redirect protocol: ${parsed.protocol}. Only http/https are allowed.`
+    );
+  }
+
+  return parsed.href;
 }
