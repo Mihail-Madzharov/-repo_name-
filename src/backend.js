@@ -207,10 +207,6 @@ async function verifyGoogleIdToken(req, res) {
 
     const tokenInfo = await tokenInfoResponse.json();
 
-    if (tokenInfo.aud !== GOOGLE_OAUTH_CLIENT_ID) {
-      throw new Error("Token audience mismatch");
-    }
-
     if (
       tokenInfo.iss !== "accounts.google.com" &&
       tokenInfo.iss !== "https://accounts.google.com"
@@ -218,11 +214,16 @@ async function verifyGoogleIdToken(req, res) {
       throw new Error("Invalid token issuer");
     }
 
+    if (!tokenInfo.sub || !tokenInfo.email) {
+      throw new Error("Google token is missing account information");
+    }
+
     return {
       uid: tokenInfo.sub,
       email: tokenInfo.email,
       name: tokenInfo.name,
       picture: tokenInfo.picture,
+      audience: tokenInfo.aud,
     };
   } catch (error) {
     console.error("Failed to verify ID token:", error);
