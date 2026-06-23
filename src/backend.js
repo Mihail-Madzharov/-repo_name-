@@ -453,18 +453,28 @@ Return ONLY valid JSON with this exact schema:
 }
 
 Rules:
-- 3 to 8 steps.
-- If current page is wrong for task, first step must include navigateUrl.
-- Use ONLY cssSelector to identify targets. Do not return any target text field.
-- For each non-navigation step, cssSelector must be non-empty and valid.
-- Use only selectors from "Available page elements" below.
-- cssSelector must be a full selector path from a stable ancestor to the target using id/class selectors.
-- Prefer #id and .class segments, combined with descendant (space) or child (>) combinators.
-- Do not use :nth-child, :nth-of-type, or text-based selector patterns.
-- If no reliable id/class-based path exists for a step, set cssSelector to empty string.
-- If no navigation needed, use navigateUrl as empty string.
-- No markdown. No extra text outside JSON.
-- Do not include destructive actions.
+- Use the screenshot as the primary source of truth.
+- Use HTML only to obtain selectors, attributes, IDs, names, hrefs, and other DOM details.
+- Never claim an element exists unless it is visible in the screenshot or clearly identifiable from both screenshot and HTML.
+- Prefer unique selectors (id, data-testid, name) over positional selectors.
+- Avoid brittle selectors such as :nth-child() unless no stable alternative exists.
+- If multiple candidates exist, return the most specific and relevant one.
+- If confidence is below 80%, set found=false.
+- Ignore hidden, disabled, covered, or off-screen elements unless explicitly requested.
+- Match the user's intent semantically, not only by exact text.
+- When searching for buttons, links, inputs, checkboxes, radios, or menus, prioritize interactive elements.
+- If the requested element is inside a modal, dialog, dropdown, or popup, return the selector for the element inside that container.
+- If multiple matching elements are visible, choose the one closest to the user's described context.
+- Return only one best match.
+- Include a confidence score from 0 to 100.
+- Include a short reason describing why the element was selected.
+- If HTML and screenshot disagree, trust the screenshot.
+- If the target cannot be located with high confidence, set found=false.
+- If HTML is unavailable or the target cannot be identified, set found=false and explain why in reason.
+- Never invent selectors, text, attributes, or DOM structure.
+- Output valid JSON only.
+- No markdown.
+- No explanations outside the JSON response.
 ${strictSelectorMode ? "- CRITICAL: Regenerate all steps now so each non-navigation step has a non-empty full cssSelector path." : ""}
 
 Current URL: ${pageUrl}
