@@ -8,24 +8,40 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json({ limit: "25mb" }));
 
+const firebaseServiceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 const firebaseServiceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH || path.resolve(process.cwd(), "gpt-embeded-firebase-adminsdk-fbsvc-6a91347930.json");
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || "gpt-embeded";
 let firebaseAdminInitialized = false;
 let db = null;
 
 try {
-  const serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, "utf8"));
+  let serviceAccount;
+  let initSource;
+
+  // Try JSON environment variable first
+  if (firebaseServiceAccountJson) {
+    serviceAccount = JSON.parse(firebaseServiceAccountJson);
+    initSource = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable";
+  } else {
+    serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, "utf8"));
+    initSource = `file path: ${firebaseServiceAccountPath}`;
+  }
+
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
+    projectId: firebaseProjectId,
   });
   firebaseAdminInitialized = true;
   db = getFirestore();
-  console.log(`Firebase Admin initialized using ${firebaseServiceAccountPath}`);
+  console.log(`Firebase Admin initialized using ${initSource}`);
 } catch (error) {
   console.warn(
-    `Firebase Admin could not initialize from ${firebaseServiceAccountPath}: ${error.message}`
+    `Firebase Admin could not initialize from credentials: ${error.message}`
   );
   try {
-    admin.initializeApp();
+    admin.initializeApp({
+      projectId: firebaseProjectId,
+    });
     firebaseAdminInitialized = true;
     db = getFirestore();
     console.log("Firebase Admin initialized using application default credentials.");
@@ -330,6 +346,7 @@ app.get("/health", (req, res) => {
     ),
     firebaseAdmin:
       firebaseAdminInitialized && admin.apps.length > 0,
+    firebaseProjectId: firebaseProjectId,
   });
 });
 
