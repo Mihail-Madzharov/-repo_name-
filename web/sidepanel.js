@@ -3,6 +3,15 @@ const resultEl = document.getElementById("result");
 const runBtn = document.getElementById("run");
 const loadingEl = document.getElementById("loading");
 
+// Navigation Confirmation Modal
+const navModal = document.getElementById("nav-confirmation-modal");
+const navUrlDisplay = document.getElementById("nav-url-display");
+const navConfirmBtn = document.getElementById("nav-confirm-btn");
+const navCancelBtn = document.getElementById("nav-cancel-btn");
+
+let pendingNavigationUrl = null;
+let navigationResolver = null;
+
 // API Key Management
 const apiKeyInput = document.getElementById("api-key");
 const saveKeyBtn = document.getElementById("save-key");
@@ -45,7 +54,48 @@ document.addEventListener("DOMContentLoaded", () => {
   loadStoredAuth();
   updateAuthStatus();
   loadStoredApiKey();
+  setupNavigationConfirmation();
 });
+
+// Navigation Confirmation Setup
+function setupNavigationConfirmation() {
+  navConfirmBtn.addEventListener("click", () => {
+    if (navigationResolver) {
+      navigationResolver(true);
+      navigationResolver = null;
+    }
+    navModal.style.display = "none";
+  });
+
+  navCancelBtn.addEventListener("click", () => {
+    if (navigationResolver) {
+      navigationResolver(false);
+      navigationResolver = null;
+    }
+    navModal.style.display = "none";
+  });
+
+  // Close modal when clicking outside
+  navModal.addEventListener("click", (e) => {
+    if (e.target === navModal) {
+      if (navigationResolver) {
+        navigationResolver(false);
+        navigationResolver = null;
+      }
+      navModal.style.display = "none";
+    }
+  });
+}
+
+// Ask user for navigation confirmation
+async function askForNavigation(url) {
+  navUrlDisplay.textContent = url;
+  navModal.style.display = "flex";
+
+  return new Promise((resolve) => {
+    navigationResolver = resolve;
+  });
+}
 
 async function loadStoredAuth() {
   try {
@@ -496,18 +546,14 @@ async function runJourneyStep(stepIndex) {
   const step = activeJourney.steps[stepIndex];
   if (!step) return;
 
+  // Check if navigation is required but not done yet
   if (step.navigateUrl) {
-    try {
-      await navigateToJourneyUrl(step.navigateUrl);
-    } catch (error) {
-      throw new Error(
-        `Failed to navigate to required page: ${error?.message || "unknown error"}`
-      );
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    throw new Error(
+      `This step requires navigating to another page. Click "Open Required Page" to navigate.`
+    );
   }
 
+  // Only highlight the target on the current page
   if (step.targetText) {
     const highlightResponse = await chrome.runtime.sendMessage({
       type: "HIGHLIGHT_TARGET",

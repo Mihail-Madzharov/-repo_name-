@@ -560,5 +560,65 @@
     </div>
 
     <script src="sidepanel.js"></script>
+
+    <!-- Navigation Confirmation Modal -->
+    <div id="nav-confirmation-modal" style="
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+    ">
+      <div style="
+        background: var(--vscode-editor-background, #1e1e1e);
+        border: 1px solid var(--vscode-panel-border, #3e3e42);
+        border-radius: 8px;
+        padding: 20px;
+        max-width: 400px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+      ">
+        <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 16px;">Navigate to Page?</h3>
+        <p id="nav-url-display" style="
+          margin: 12px 0;
+          padding: 8px;
+          background: var(--vscode-input-background, #252526);
+          border-radius: 4px;
+          font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+          font-size: 12px;
+          word-break: break-all;
+          color: var(--vscode-descriptionForeground, #cccccc);
+        "></p>
+        <p style="margin: 12px 0; font-size: 13px; color: var(--vscode-editor-foreground, #d4d4d4);">
+          The next step requires navigating to a different page.
+        </p>
+        <div style="display: flex; gap: 8px; margin-top: 16px;">
+          <button id="nav-confirm-btn" style="
+            flex: 1;
+            padding: 8px 16px;
+            background: var(--vscode-button-background, #007acc);
+            color: white;
+            border: 1px solid var(--vscode-button-border, #007acc);
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+          ">Navigate</button>
+          <button id="nav-cancel-btn" style="
+            flex: 1;
+            padding: 8px 16px;
+            background: transparent;
+            color: var(--vscode-button-foreground, #d4d4d4);
+            border: 1px solid var(--vscode-panel-border, #3e3e42);
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+          ">Cancel</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
