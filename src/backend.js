@@ -20,34 +20,36 @@ try {
 
   // Try JSON environment variable first
   if (firebaseServiceAccountJson) {
-    serviceAccount = JSON.parse(firebaseServiceAccountJson);
-    initSource = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable";
+    console.log("Attempting to parse FIREBASE_SERVICE_ACCOUNT_JSON...");
+    try {
+      serviceAccount = JSON.parse(firebaseServiceAccountJson);
+      initSource = "FIREBASE_SERVICE_ACCOUNT_JSON environment variable";
+      console.log(`✅ Successfully parsed Firebase credentials from env var`);
+    } catch (parseError) {
+      console.error("❌ Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON:", parseError.message);
+      throw new Error(`Invalid JSON in FIREBASE_SERVICE_ACCOUNT_JSON: ${parseError.message}`);
+    }
   } else {
+    console.log(`Attempting to read credentials from file: ${firebaseServiceAccountPath}`);
     serviceAccount = JSON.parse(fs.readFileSync(firebaseServiceAccountPath, "utf8"));
     initSource = `file path: ${firebaseServiceAccountPath}`;
+    console.log(`✅ Successfully read Firebase credentials from file`);
   }
 
+  console.log("Initializing Firebase Admin with credentials...");
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
     projectId: firebaseProjectId,
   });
   firebaseAdminInitialized = true;
   db = getFirestore();
-  console.log(`Firebase Admin initialized using ${initSource}`);
+  console.log(`✅ Firebase Admin initialized using ${initSource}`);
 } catch (error) {
-  console.warn(
-    `Firebase Admin could not initialize from credentials: ${error.message}`
+  console.error(
+    `❌ Firebase Admin could not initialize from credentials: ${error.message}`
   );
-  try {
-    admin.initializeApp({
-      projectId: firebaseProjectId,
-    });
-    firebaseAdminInitialized = true;
-    db = getFirestore();
-    console.log("Firebase Admin initialized using application default credentials.");
-  } catch (innerError) {
-    console.error("Firebase Admin initialization failed:", innerError);
-  }
+  console.error("Error details:", error);
+  console.warn("⚠️  Firebase Admin will not be available. Credentials must be set.");
 }
 
 // OAuth Configuration
