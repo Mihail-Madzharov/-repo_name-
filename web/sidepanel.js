@@ -12,65 +12,127 @@ const keyStatusEl = document.getElementById("key-status");
 const authStatusEl = document.getElementById("auth-status");
 const firebaseAuthStatusEl = document.getElementById("firebase-auth-status");
 
-// Firebase Authentication
+// Google Authentication
 const googleLoginBtn = document.getElementById("google-login");
 const googleLogoutBtn = document.getElementById("google-logout");
 
 let currentUser = null;
-let firebaseAuth = null;
+let idToken = null;
 
 // Tab Management
 const tabBtns = document.querySelectorAll(".tab-btn");
 const tabContents = document.querySelectorAll(".tab-content");
 
-// Initialize Firebase and load auth state on startup
+// Backend URL
+const BACKEND_URL = "https://gpt-extension.onrender.com";
+const GOOGLE_CLIENT_ID = "169950079174-j1ai4pdp22dem45484iuve3tn6gokpot.apps.googleusercontent.com";
+const REDIRECT_URL = chrome.identity.getRedirectURL();
+
+// Initialize on startup
 document.addEventListener("DOMContentLoaded", () => {
-  initFirebase();
-  loadStoredApiKey();
+  loadStoredAuth();
   updateAuthStatus();
+  loadStoredApiKey();
 });
 
-function initFirebase() {
-  if (!window.firebase || !window.FIREBASE_CONFIG) {
-    console.warn("Firebase is not configured. Please add your firebase-config.js with your project settings.");
-    firebaseAuthStatusEl.textContent = "Firebase not configured";
-    firebaseAuthStatusEl.className = "auth-status unauthenticated";
-    return;
-  }
-
-  if (!firebase.apps.length) {
-    firebase.initializeApp(window.FIREBASE_CONFIG);
-  }
-
-  firebaseAuth = firebase.auth();
-  firebaseAuth.onAuthStateChanged(handleAuthStateChange);
-}
-
-async function getIdToken() {
-  if (!currentUser) return null;
+async function loadStoredAuth() {
   try {
-    return await currentUser.getIdToken();
+    const data = await chrome.storage.sync.get(["idToken", "userEmail"]);
+    if (data.idToken) {
+      idToken = data.idToken;
+      currentUser = { email: data.userEmail };
+      updateFirebaseAuthStatus();
+    }
   } catch (error) {
-    console.error("Failed to get ID token:", error);
-    return null;
+    console.error("Error loading stored auth:", error);
   }
 }
+
+function updateFirebaseAuthStatus() {
+  if (currentUser && idToken) {
+    firebaseAuthStatusEl.textContent = `Signed in as ${currentUser.email}`;
+    firebaseAuthStatusEl.className = "auth-status authenticated";
+    googleLoginBtn.style.display = "none";
+    googleLogoutBtn.style.display = "inline-flex";
+  } else {
+    firebaseAuthStatusEl.textContent = "Not signed in";
+    firebaseAuthStatusEl.className = "auth-status unauthenticated";
+    googleLoginBtn.style.display = "inline-flex";
+    googleLogoutBtn.style.display = "none";
+  }
+}
+
+googleLoginBtn.addEventListener("click", async () => {
+  googleLoginBtn.disabled = true;
+  googleLoginBtn.textContent = "Signing in...";
+
+  try {
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${GOOGLE_CLIENT_ID}&response_type=id_token&scope=openid%20email&redirect_uri=${encodeURIComponent(REDIRECT_URL)}&nonce=random_nonce`;
+
+    const redirectUrl = await chrome.identity.launchWebAuthFlow({
+      url: authUrl,
+      interactive: true,
+    });
+
+    // Extract the ID token from the redirect URL
+    const url = new URL(redirectUrl);
+    const token = url.hash.split("id_token=")[1];
+
+    if (!token) {
+      throw new Error("No ID token received from Google");
+    }
+
+    idToken = token;
+
+    // Verify token with backend and create user
+    const response = await backendRequest("/verify-google-token", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({}),
+    });
+
+    currentUser = { email: response.email, uid: response.uid };
+
+    // Store auth
+    await chrome.storage.sync.set({
+      idToken: token,
+      userEmail: currentUser.email,
+      userId: currentUser.uid,
+    });
+
+    showKeyStatus("✅ Signed in with Google", "success");
+    updateFirebaseAuthStatus();
+    await loadOpenAIKeyFromBackend();
+  } catch (error) {
+    showKeyStatus(`Google sign in failed: ${error.message}`, "error");
+    console.error("Google login error:", error);
+  } finally {
+    googleLoginBtn.disabled = false;
+    googleLoginBtn.textContent = "🔵 Sign in with Google";
+  }
+});
+
+googleLogoutBtn.addEventListener("click", async () => {
+  try {
+    idToken = null;
+    currentUser = null;
+    await chrome.storage.sync.remove(["idToken", "userEmail", "userId"]);
+    apiKeyInput.value = "";
+    showKeyStatus("✅ Signed out", "success");
+    updateAuthStatus();
+    updateFirebaseAuthStatus();
+  } catch (error) {
+    showKeyStatus(`Sign out failed: ${error.message}`, "error");
+  }
+});
 
 async function backendRequest(path, options = {}) {
-  const baseUrl = window.BACKEND_URL || "https://gpt-extension.onrender.com";
-  const token = await getIdToken();
-  const headers = {
-    "Content-Type": "application/json",
-    ...options.headers,
-  };
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetch(`${BACKEND_URL}${path}`, {
     ...options,
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
   });
 
   if (!response.ok) {
@@ -81,92 +143,21 @@ async function backendRequest(path, options = {}) {
   return response.json();
 }
 
-
-async function handleAuthStateChange(user) {
-  currentUser = user;
-
-  if (user) {
-    firebaseAuthStatusEl.textContent = `Signed in as ${user.email}`;
-    firebaseAuthStatusEl.className = "auth-status authenticated";
-    googleLoginBtn.style.display = "none";
-    googleLogoutBtn.style.display = "inline-flex";
-    await loadFirebaseOpenAIKey();
-  } else {
-    firebaseAuthStatusEl.textContent = "Not signed in to Firebase";
-    firebaseAuthStatusEl.className = "auth-status unauthenticated";
-    googleLoginBtn.style.display = "inline-flex";
-    googleLogoutBtn.style.display = "none";
-  }
-
-  updateAuthStatus();
-}
-
-async function loadFirebaseOpenAIKey() {
-  if (!currentUser) {
-    return;
-  }
+async function loadOpenAIKeyFromBackend() {
+  if (!idToken) return;
 
   try {
-    const data = await backendRequest("/openai-key", { method: "GET" });
+    const data = await backendRequest("/openai-key", {
+      method: "GET",
+      headers: { Authorization: `Bearer ${idToken}` },
+    });
+
     if (data.apiKey) {
       apiKeyInput.value = data.apiKey;
       await chrome.storage.sync.set({ openaiApiKey: data.apiKey, authMethod: "firebase" });
     }
   } catch (error) {
-    console.error("Error loading OpenAI key from backend:", error);
-  }
-}
-
-googleLoginBtn.addEventListener("click", async () => {
-  if (!firebaseAuth) {
-    showKeyStatus("Firebase is not configured.", "error");
-    return;
-  }
-
-  const provider = new firebase.auth.GoogleAuthProvider();
-  googleLoginBtn.disabled = true;
-  googleLoginBtn.textContent = "Signing in...";
-
-  try {
-    await firebaseAuth.signInWithPopup(provider);
-    showKeyStatus("✅ Signed in with Google", "success");
-  } catch (error) {
-    showKeyStatus(`Google sign in failed: ${error.message}`, "error");
-  } finally {
-    googleLoginBtn.disabled = false;
-    googleLoginBtn.textContent = "🔵 Sign in with Google";
-  }
-});
-
-googleLogoutBtn.addEventListener("click", async () => {
-  if (!firebaseAuth) {
-    return;
-  }
-
-  try {
-    await firebaseAuth.signOut();
-    showKeyStatus("✅ Signed out", "success");
-    apiKeyInput.value = "";
-    await chrome.storage.sync.remove(["openaiApiKey", "authMethod"]);
-    updateAuthStatus();
-  } catch (error) {
-    showKeyStatus(`Sign out failed: ${error.message}`, "error");
-  }
-});
-
-async function loadFirebaseOpenAIKey() {
-  if (!currentUser) {
-    return;
-  }
-
-  try {
-    const data = await backendRequest("/openai-key", { method: "GET" });
-    if (data.apiKey) {
-      apiKeyInput.value = data.apiKey;
-      await chrome.storage.sync.set({ openaiApiKey: data.apiKey, authMethod: "firebase" });
-    }
-  } catch (error) {
-    console.error("Error loading OpenAI key from backend:", error);
+    console.error("Error loading OpenAI key:", error);
   }
 }
 
@@ -174,10 +165,10 @@ async function loadFirebaseOpenAIKey() {
 tabBtns.forEach((btn) => {
   btn.addEventListener("click", () => {
     const tabName = btn.getAttribute("data-tab");
-    
+
     tabBtns.forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
-    
+
     tabContents.forEach((tab) => tab.classList.remove("active"));
     document.getElementById(`${tabName}-tab`).classList.add("active");
   });
@@ -205,13 +196,14 @@ saveKeyBtn.addEventListener("click", async () => {
   }
 
   try {
-    if (currentUser) {
+    if (currentUser && idToken) {
       await backendRequest("/openai-key", {
         method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({ openaiApiKey: key }),
       });
       await chrome.storage.sync.set({ openaiApiKey: key, authMethod: "firebase" });
-      showKeyStatus("✅ OpenAI key saved to Firebase backend", "success");
+      showKeyStatus("✅ OpenAI key saved to backend", "success");
     } else {
       await chrome.storage.sync.set({ openaiApiKey: key, authMethod: "manual" });
       showKeyStatus("✅ API key saved locally", "success");
@@ -230,9 +222,10 @@ clearKeyBtn.addEventListener("click", async () => {
   }
 
   try {
-    if (currentUser) {
+    if (currentUser && idToken) {
       await backendRequest("/openai-key", {
         method: "DELETE",
+        headers: { Authorization: `Bearer ${idToken}` },
       });
     }
 
@@ -262,7 +255,7 @@ async function updateAuthStatus() {
   try {
     const data = await chrome.storage.sync.get(["openaiApiKey", "authMethod"]);
     if (data.openaiApiKey) {
-      const method = data.authMethod === "firebase" ? "Firebase" : data.authMethod === "oauth" ? "OpenAI OAuth" : "Manual API Key";
+      const method = data.authMethod === "firebase" ? "Firebase" : "Manual API Key";
       authStatusEl.textContent = `✅ Authenticated via ${method}`;
       authStatusEl.className = "auth-status authenticated";
     } else {

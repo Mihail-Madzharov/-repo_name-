@@ -201,6 +201,35 @@ async function verifyIdToken(req, res) {
   }
 }
 
+// Verify Google ID token and create/update user
+app.post("/verify-google-token", async (req, res) => {
+  const idToken = getIdTokenFromRequest(req);
+  if (!idToken) {
+    return res.status(401).json({ error: "Authorization token is required." });
+  }
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const uid = decodedToken.uid;
+    const email = decodedToken.email;
+
+    // Create or update user in Firestore
+    await admin.firestore().collection("users").doc(uid).set(
+      {
+        email,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastSignIn: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    res.json({ uid, email });
+  } catch (error) {
+    console.error("Failed to verify Google token:", error);
+    res.status(401).json({ error: "Invalid authorization token." });
+  }
+});
+
 app.get("/openai-key", async (req, res) => {
   const decodedToken = await verifyIdToken(req, res);
   if (!decodedToken) return;
