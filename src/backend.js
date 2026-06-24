@@ -229,14 +229,6 @@ app.post("/ai-task", async (req, res) => {
     const taskText = String(task || "").trim();
     const normalizedTaskText = taskText.toLowerCase();
 
-    const hasExtractionIntent = extractionIntentPatterns.some((pattern) =>
-      pattern.test(normalizedTaskText),
-    );
-    const hasHtmlTarget = htmlTargetPatterns.some((pattern) =>
-      pattern.test(normalizedTaskText),
-    );
-    const isHtmlExtractionTask = hasExtractionIntent && hasHtmlTarget;
-
     const explanationIntentPatterns = [
       // English
       /\bexplain\b/i,
@@ -284,66 +276,6 @@ app.post("/ai-task", async (req, res) => {
     const hasPageReference = pageReferencePatterns.some((pattern) =>
       pattern.test(normalizedTaskText),
     );
-    const isPageExplanationTask = hasExplanationIntent && hasPageReference;
-
-    if (isPageExplanationTask) {
-      const shouldReplyInBulgarian = /[\u0400-\u04FF]/.test(taskText);
-      const explanationLanguage = shouldReplyInBulgarian
-        ? "Bulgarian"
-        : "English";
-
-      const explanationResponse = await openai.responses.create({
-        model: "gpt-4.1-mini",
-        input: [
-          {
-            role: "user",
-            content: `
-You are a web page explanation assistant.
-
-The user asked: "${taskText}"
-
-Respond in ${explanationLanguage}.
-
-Write a concise explanation of the CURRENT page, based on the provided URL, title, and available elements.
-
-Requirements:
-- Keep it factual and grounded in the provided page data.
-- Start with a 1-2 sentence summary.
-- Then provide 4-8 short bullet points describing what this page is, key sections, and what the user can do here.
-- Mention uncertain points as "might" or "appears to".
-- No markdown headings.
-
-Current URL: ${pageUrl}
-Current Title: ${pageTitle}
-
-Page elements available:
-${elementsText}
-`,
-          },
-        ],
-      });
-
-      const explanationText =
-        String(explanationResponse.output_text || "").trim() ||
-        "This page appears to contain content, but I could not confidently summarize it from the available context.";
-
-      return res.json({
-        mode: "page_explanation",
-        message: explanationText,
-        journey: {
-          summary: "Current page explanation",
-          currentUrl: pageUrl,
-          steps: [],
-        },
-      });
-    }
-
-    const extractedSelectors = Array.isArray(pageContext?.elements)
-      ? pageContext.elements
-          .map((item) => String(item?.selector || "").trim())
-          .filter(Boolean)
-      : [];
-    const extractedSelectorSet = new Set(extractedSelectors);
 
     const buildNavigationPrompt = ({ strictSelectorMode = false } = {}) => `
 You are a web page assistant.
