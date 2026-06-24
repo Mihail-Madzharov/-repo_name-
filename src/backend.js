@@ -193,7 +193,8 @@ app.post("/oauth/callback", async (req, res) => {
 
 // AI Task Endpoint
 app.post("/ai-task", async (req, res) => {
-  const { url, title, pageContext, task, apiKey, screenshot } = req.body;
+  const { url, title, pageContext, task, apiKey, screenshot, chatHistory } =
+    req.body;
 
   // Use the provided API key or fall back to environment variable
   const key = apiKey || process.env.OPENAI_API_KEY;
@@ -229,50 +230,25 @@ app.post("/ai-task", async (req, res) => {
     const taskText = String(task || "").trim();
     const normalizedTaskText = taskText.toLowerCase();
 
-    const explanationIntentPatterns = [
-      // English
-      /\bexplain\b/i,
-      /\bdescribe\b/i,
-      /\bsummari[sz]e\b/i,
-      /\boverview\b/i,
-      /\bwalk\s+me\s+through\b/i,
-      /\bwhat\s+is\s+this\b/i,
-      /\bwhat\s+does\s+this\s+(page|screen|site|website)\s+do\b/i,
-      /\bhow\s+does\s+this\s+(page|screen|site|website)\s+work\b/i,
+    const normalizedChatHistory = Array.isArray(chatHistory)
+      ? chatHistory
+          .map((entry) => ({
+            role: entry?.role === "assistant" ? "assistant" : "user",
+            content: String(entry?.content || "").trim(),
+          }))
+          .filter((entry) => Boolean(entry.content))
+          .slice(-12)
+      : [];
 
-      // Bulgarian
-      /обясни/i,
-      /опиши/i,
-      /резюмирай/i,
-      /какво\s+е\s+това/i,
-      /за\s+какво\s+е\s+тази\s+страница/i,
-      /как\s+работи\s+тази\s+страница/i,
-      /разкажи\s+ми\s+за\s+тази\s+страница/i,
-      /обобщи/i,
-    ];
+    const chatHistoryText = normalizedChatHistory.length
+      ? normalizedChatHistory
+          .map((entry, index) => {
+            const label = entry.role === "assistant" ? "Assistant" : "User";
+            return `${index + 1}. ${label}: ${entry.content}`;
+          })
+          .join("\n")
+      : "(no prior conversation)";
 
-    const pageReferencePatterns = [
-      // English
-      /\bpage\b/i,
-      /\bscreen\b/i,
-      /\bsite\b/i,
-      /\bwebsite\b/i,
-      /\bcurrent\b/i,
-      /\bthis\s+tab\b/i,
-
-      // Bulgarian
-      /страниц/i,
-      /екран/i,
-      /сайт/i,
-      /уебсайт/i,
-      /текущ/i,
-      /този\s+таб/i,
-      /тази\s+страница/i,
-    ];
-
-    const hasExplanationIntent = explanationIntentPatterns.some((pattern) =>
-      pattern.test(normalizedTaskText),
-    );
     const hasPageReference = pageReferencePatterns.some((pattern) =>
       pattern.test(normalizedTaskText),
     );
@@ -344,6 +320,9 @@ Current Title: ${pageTitle}
 User task:
 ${task}
 
+Recent conversation context:
+${chatHistoryText}
+
 Available page elements:
 ${elementsText}
 `;
@@ -404,12 +383,14 @@ ${elementsText}
         : [];
 
       return {
+        intent: String(safeJourney.intent || "navigate"),
         found: Boolean(safeJourney.found),
         confidence: Number(safeJourney.confidence || 0),
         summary: String(
           safeJourney.summary || "Follow these steps on the current page.",
         ),
         currentUrl: String(safeJourney.currentUrl || pageUrl),
+        explanation: String(safeJourney.explanation || ""),
         reason: String(safeJourney.reason || ""),
 
         steps: safeSteps.map((step) => {
@@ -432,25 +413,6 @@ ${elementsText}
           };
         }),
       };
-    };
-
-    const isValidIdClassPathSelector = (selector) => {
-      const value = String(selector || "").trim();
-      if (!value) return false;
-      if (/:nth-child|:nth-of-type|:contains|:has\(|:text\(/i.test(value)) {
-        return false;
-      }
-      if (!/[#.]/.test(value)) return false;
-      if (/^#[A-Za-z0-9_-]+$/.test(value)) return true;
-      if (!/[ >]/.test(value)) return false;
-
-      const segments = value
-        .split(/\s*>\s*|\s+/)
-        .map((segment) => segment.trim())
-        .filter(Boolean);
-
-      if (segments.length < 2) return false;
-      return segments.every((segment) => /[#.]/.test(segment));
     };
 
     const buildInputContent = (promptText) => {

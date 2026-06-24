@@ -25,7 +25,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     return true;
   } else if (message.type === "GET_PAGE_CONTEXT") {
-    handleGetPageContext(message.task, message.apiKey)
+    handleGetPageContext(message.task, message.apiKey, message.chatHistory)
       .then(sendResponse)
       .catch((error) => {
         console.error(error);
@@ -133,7 +133,7 @@ async function handleOAuthFlow(windowId) {
   }
 }
 
-async function handleGetPageContext(task, apiKey) {
+async function handleGetPageContext(task, apiKey, chatHistory = []) {
   const tab = await getActiveTab();
 
   if (!tab?.id) {
@@ -157,6 +157,7 @@ async function handleGetPageContext(task, apiKey) {
     },
     body: JSON.stringify({
       task,
+      chatHistory,
       tab: {
         url: tab.url,
         title: tab.title,

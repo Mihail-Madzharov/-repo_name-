@@ -32,6 +32,11 @@ let currentUser = null;
 let idToken = null;
 let activeJourney = null;
 let activeStepIndex = 0;
+let lastAiResult = null;
+let chatHistory = [];
+
+const CHAT_SESSION_STORAGE_KEY = "chatSessionState";
+const MAX_CHAT_HISTORY_ITEMS = 20;
 
 // Tab Management
 const tabBtns = document.querySelectorAll(".tab-btn");
@@ -50,12 +55,142 @@ function generateOAuthState() {
 }
 
 // Initialize on startup
-document.addEventListener("DOMContentLoaded", () => {
-  loadStoredAuth();
-  updateAuthStatus();
-  loadStoredApiKey();
+document.addEventListener("DOMContentLoaded", async () => {
+  await loadStoredChatSession();
+  await loadStoredAuth();
+  await updateAuthStatus();
+  await loadStoredApiKey();
   setupNavigationConfirmation();
 });
+
+async function readSessionState() {
+  try {
+    if (!chrome.storage?.session) {
+      return {};
+    }
+
+    const data = await chrome.storage.session.get(CHAT_SESSION_STORAGE_KEY);
+    return data?.[CHAT_SESSION_STORAGE_KEY] || {};
+  } catch (error) {
+    console.error("Error reading session state:", error);
+    return {};
+  }
+}
+
+async function writeSessionState(nextState) {
+  try {
+    if (!chrome.storage?.session) {
+      return;
+    }
+
+    await chrome.storage.session.set({
+      [CHAT_SESSION_STORAGE_KEY]: nextState,
+    });
+  } catch (error) {
+    console.error("Error writing session state:", error);
+  }
+}
+
+function sanitizeChatHistory(history) {
+  if (!Array.isArray(history)) return [];
+
+  return history
+    .map((entry) => ({
+      role: entry?.role === "assistant" ? "assistant" : "user",
+      content: String(entry?.content || "").trim(),
+    }))
+    .filter((entry) => Boolean(entry.content))
+    .slice(-MAX_CHAT_HISTORY_ITEMS);
+}
+
+async function persistChatSession() {
+  await writeSessionState({
+    taskDraft: String(taskEl.value || ""),
+    activeStepIndex,
+    activeJourney,
+    lastAiResult,
+    chatHistory: sanitizeChatHistory(chatHistory),
+  });
+}
+
+async function loadStoredChatSession() {
+  const state = await readSessionState();
+  taskEl.value = String(state.taskDraft || "");
+  chatHistory = sanitizeChatHistory(state.chatHistory);
+
+  if (state.lastAiResult) {
+    lastAiResult = state.lastAiResult;
+    renderJourney(lastAiResult);
+
+    if (activeJourney?.steps?.length) {
+      const restoredStep = Number(state.activeStepIndex || 0);
+      activeStepIndex = Math.max(
+        0,
+        Math.min(restoredStep, activeJourney.steps.length - 1),
+      );
+      renderActiveJourney();
+    }
+  } else if (state.activeJourney?.steps?.length) {
+    activeJourney = state.activeJourney;
+    activeStepIndex = Math.max(
+      0,
+      Math.min(
+        Number(state.activeStepIndex || 0),
+        state.activeJourney.steps.length - 1,
+      ),
+    );
+    renderActiveJourney();
+  }
+}
+
+function toAssistantMessage(aiResult) {
+  const explainPayload = getExplainPayload(aiResult);
+  if (explainPayload?.explanation) {
+    return explainPayload.explanation;
+  }
+
+  const journeySteps = Array.isArray(aiResult?.journey?.steps)
+    ? aiResult.journey.steps
+    : [];
+
+  if (journeySteps.length > 0) {
+    const stepPreview = journeySteps
+      .slice(0, 3)
+      .map((step, idx) => {
+        const title = String(step?.title || `Step ${idx + 1}`);
+        const action = String(step?.action || "Continue");
+        return `${idx + 1}. ${title}: ${action}`;
+      })
+      .join("\n");
+
+    return String(aiResult?.message || "")
+      ? `${String(aiResult.message)}\n\n${stepPreview}`
+      : stepPreview;
+  }
+
+  return String(aiResult?.message || "").trim();
+}
+
+function addChatTurn(userMessage, aiResult) {
+  const userText = String(userMessage || "").trim();
+  const assistantText = toAssistantMessage(aiResult);
+
+  if (userText) {
+    chatHistory.push({
+      role: "user",
+      content: userText,
+    });
+  }
+
+  if (assistantText) {
+    chatHistory.push({
+      role: "assistant",
+      content: assistantText,
+    });
+  }
+
+  chatHistory = sanitizeChatHistory(chatHistory);
+}
 
 // Navigation Confirmation Setup
 function setupNavigationConfirmation() {
@@ -505,6 +640,48 @@ function resolveStepNavigationUrl(step) {
     window.location.href ||
     "";
 
+    function parseAiJsonMessage(message) {
+      const raw = String(message || "").trim();
+      if (!raw) return null;
+
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function getExplainPayload(aiResult) {
+      const journey = aiResult?.journey;
+      if (journey?.intent === "explain") {
+        const explanation = String(
+          journey?.explanation || journey?.reason || aiResult?.message || "",
+        ).trim();
+
+        if (explanation) {
+          return {
+            explanation,
+          };
+        }
+      }
+
+      const parsedMessage = parseAiJsonMessage(aiResult?.message);
+      if (parsedMessage?.intent === "explain") {
+        const explanation = String(
+          parsedMessage?.explanation || parsedMessage?.reason || "",
+        ).trim();
+
+        if (explanation) {
+          return {
+            explanation,
+          };
+        }
+      }
+
+      return null;
+    }
+
   try {
     return normalizeNavigationUrl(hrefFromSelector, baseUrl);
   } catch {
@@ -664,9 +841,22 @@ function renderActiveJourney() {
       </div>
     </div>
   `;
+
+  void persistChatSession();
 }
 
 function renderJourney(aiResult) {
+  lastAiResult = aiResult || null;
+
+  const explainPayload = getExplainPayload(aiResult);
+  if (explainPayload?.explanation) {
+    activeJourney = null;
+    activeStepIndex = 0;
+    resultEl.innerHTML = `<div class="journey-summary">Current Page Explanation</div><div class="journey-raw">${escapeHtml(explainPayload.explanation)}</div>`;
+    void persistChatSession();
+    return;
+  }
+
   if (aiResult?.mode === "html_extraction") {
     activeJourney = null;
     activeStepIndex = 0;
@@ -681,6 +871,7 @@ function renderJourney(aiResult) {
       <div class="journey-step-target">Target: <strong>${escapeHtml(targetLabel)}</strong></div>
       ${hasHtml ? `<div class="journey-raw">${escapeHtml(extraction.html)}</div>` : `<div class="journey-raw">No HTML extracted.</div>`}
     `;
+    void persistChatSession();
     return;
   }
 
@@ -688,6 +879,7 @@ function renderJourney(aiResult) {
     activeJourney = null;
     activeStepIndex = 0;
     resultEl.innerHTML = `<div class="journey-summary">Current Page Explanation</div><div class="journey-raw">${escapeHtml(aiResult?.message || "No explanation returned.")}</div>`;
+    void persistChatSession();
     return;
   }
 
@@ -816,9 +1008,13 @@ runBtn.addEventListener("click", async () => {
     const data = await chrome.storage.sync.get("openaiApiKey");
     const apiKey = data.openaiApiKey || null;
 
+    const taskText = String(taskEl.value || "").trim();
+    const conversationContext = sanitizeChatHistory(chatHistory);
+
     const response = await chrome.runtime.sendMessage({
       type: "GET_PAGE_CONTEXT",
-      task: taskEl.value,
+      task: taskText,
+      chatHistory: conversationContext,
       apiKey,
     });
 
@@ -827,9 +1023,12 @@ runBtn.addEventListener("click", async () => {
     }
 
     renderJourney(response.aiResult);
+    addChatTurn(taskText, response.aiResult);
+    await persistChatSession();
     await safeGuideStep(0);
   } catch (error) {
     resultEl.textContent = `❌ Error: ${error.message}`;
+    await persistChatSession();
   } finally {
     loadingEl.classList.remove("active");
     runBtn.disabled = false;
@@ -842,6 +1041,10 @@ taskEl.addEventListener("keydown", (event) => {
     event.preventDefault();
     runBtn.click();
   }
+});
+
+taskEl.addEventListener("input", () => {
+  void persistChatSession();
 });
 
 apiKeyInput.addEventListener("keydown", (event) => {
